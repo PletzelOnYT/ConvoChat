@@ -10,14 +10,14 @@ on:
 jobs:
   package:
     name: Compile universal .app and make installation ZIP
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@v4
         with:
           repository: PletzelOnYT/test
-          ref: russian-snip-ready-app-20261111
+          ref: russian-snip-v21-permission-fix-20261113
       - name: Build Intel and Apple Silicon versions
         shell: bash
         run: |
@@ -26,8 +26,10 @@ jobs:
           APP="$PWD/Russian Snip.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           SOURCE="RussianSnipMac/Sources/RussianSnip.swift"
-          xcrun swiftc -parse-as-library -O -swift-version 5 -target arm64-apple-macosx13.0 -framework AppKit -framework SwiftUI -framework Vision -framework AVFoundation -framework Carbon "$SOURCE" -o "$RUNNER_TEMP/RussianSnip-arm64"
-          xcrun swiftc -parse-as-library -O -swift-version 5 -target x86_64-apple-macosx13.0 -framework AppKit -framework SwiftUI -framework Vision -framework AVFoundation -framework Carbon "$SOURCE" -o "$RUNNER_TEMP/RussianSnip-x86_64"
+          ENGINE="RussianSnipMac/Sources/SmartTranslate.swift"
+          CAPTURE="RussianSnipMac/Sources/PermissionlessCapture.swift"
+          xcrun swiftc -parse-as-library -O -swift-version 5 -target arm64-apple-macosx13.0 -framework AppKit -framework SwiftUI -framework Vision -framework AVFoundation -framework Carbon -framework Translation -framework Security -framework ScreenCaptureKit -framework CoreImage -framework CoreMedia -framework CoreVideo "$SOURCE" "$ENGINE" "$CAPTURE" -o "$RUNNER_TEMP/RussianSnip-arm64"
+          xcrun swiftc -parse-as-library -O -swift-version 5 -target x86_64-apple-macosx13.0 -framework AppKit -framework SwiftUI -framework Vision -framework AVFoundation -framework Carbon -framework Translation -framework Security -framework ScreenCaptureKit -framework CoreImage -framework CoreMedia -framework CoreVideo "$SOURCE" "$ENGINE" "$CAPTURE" -o "$RUNNER_TEMP/RussianSnip-x86_64"
           lipo -create "$RUNNER_TEMP/RussianSnip-arm64" "$RUNNER_TEMP/RussianSnip-x86_64" -output "$APP/Contents/MacOS/RussianSnip"
           chmod 755 "$APP/Contents/MacOS/RussianSnip"
           cat >"$APP/Contents/Info.plist" <<'PLIST'
@@ -42,14 +44,48 @@ jobs:
           <key>CFBundleDisplayName</key><string>Russian Snip</string>
           <key>CFBundlePackageType</key><string>APPL</string>
           <key>CFBundleIconFile</key><string>AppIcon</string>
-          <key>CFBundleShortVersionString</key><string>1.0</string>
-          <key>CFBundleVersion</key><string>1</string>
+          <key>CFBundleShortVersionString</key><string>2.1</string>
+          <key>CFBundleVersion</key><string>3</string>
           <key>LSMinimumSystemVersion</key><string>13.0</string>
           <key>NSHighResolutionCapable</key><true/>
           <key>LSApplicationCategoryType</key><string>public.app-category.education</string>
           </dict></plist>
           PLIST
           plutil -lint "$APP/Contents/Info.plist"
+      - name: Verify no legacy screen capture or permission loops
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R '/usr/sbin/screencapture\|CGRequestScreenCaptureAccess\|CGPreflightScreenCaptureAccess' RussianSnipMac/Sources; then
+            echo "Found prohibited legacy capture / repeated permission request path."
+            exit 1
+          fi
+          grep -Fq 'SCContentSharingPicker.shared' RussianSnipMac/Sources/PermissionlessCapture.swift
+          grep -Fq 'NSPasteboard.general' RussianSnipMac/Sources/RussianSnip.swift
+          echo "PASS: Apple picker and permissionless clipboard routes present."
+      - name: Run native translation engine tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx15.0 -framework AppKit -framework SwiftUI -framework Translation -framework Security \
+            "RussianSnipMac/Sources/SmartTranslate.swift" \
+            "RussianSnipMac/Tests/TranslationEngineAcceptance.swift" -o "$RUNNER_TEMP/TranslationEngineTests"
+          "$RUNNER_TEMP/TranslationEngineTests"
+      - name: Check live free API status (informational)
+        shell: bash
+        run: |
+          set +e
+          echo "Testing only a fixed public phrase; never uploading user content"
+          curl -fsS --connect-timeout 3 --max-time 10 --get \
+            --data-urlencode 'q=Привет! Как дела?' \
+            --data-urlencode 'langpair=ru|en' \
+            https://api.mymemory.translated.net/get | head -c 400
+          echo
+          for host in translate.cutie.dating translate.fedilab.app; do
+            echo "Public mirror: $host"
+            curl -sS -o /dev/null -w 'HTTP %{http_code}\n' --connect-timeout 3 --max-time 7 \
+              "https://$host/languages" || true
+          done
       - name: Make application icon
         shell: bash
         run: |
@@ -93,12 +129,12 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
           lipo -info "$APP/Contents/MacOS/RussianSnip"
           file "$APP/Contents/MacOS/RussianSnip"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "Russian-Snip-Mac-ready.zip"
-          unzip -t "Russian-Snip-Mac-ready.zip" | tail -n 2
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "Russian-Snip-Mac-v21-permission-fixed.zip"
+          unzip -t "Russian-Snip-Mac-v21-permission-fixed.zip" | tail -n 2
       - name: Publish compiled downloadable Mac app
         uses: actions/upload-artifact@v4
         with:
-          name: Russian-Snip-Mac-Compiled-App
-          path: Russian-Snip-Mac-ready.zip
+          name: Russian-Snip-Mac-v21-Permission-Fixed-App
+          path: Russian-Snip-Mac-v21-permission-fixed.zip
           if-no-files-found: error
           retention-days: 30
